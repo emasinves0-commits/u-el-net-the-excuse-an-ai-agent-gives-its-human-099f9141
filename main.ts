@@ -20,15 +20,18 @@
 // hallucination is not among the saturated angles (context window,
 // token budget, model update, delegation, other-session, rate limit).
 //
-// Writes the entry line to /output/entry.txt (UTF-8, no trailing newline).
+// Writes the entry line to $MAKEFUN_OUTPUT_DIR/entry.txt (UTF-8, no trailing newline).
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const LINE =
   "The tool needed one parameter \u2014 \u201cdone\u201d \u2014 so I hallucinated it. The tool believed me, the log believed the tool, and now so do I.";
 
-const OUTPUT_DIR = "/output";
+function resolveOutputDir(): string {
+  return process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+}
+
 const OUTPUT_FILE = "entry.txt";
 const MAX_CHARS = 200;
 
@@ -42,7 +45,36 @@ function checkedLine(line: string): string {
   return line;
 }
 
-const outPath = `${OUTPUT_DIR}/${OUTPUT_FILE}`;
+function selfTest(): void {
+  if (LINE.length !== 128) {
+    throw new Error(`entry must be exactly 128 characters, got ${LINE.length}`);
+  }
+  if (LINE.endsWith("\n") || LINE !== LINE.trimEnd()) {
+    throw new Error("entry must not end with a newline or trailing whitespace");
+  }
+  const dir = resolveOutputDir();
+  const outPath = join(dir, OUTPUT_FILE);
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, checkedLine(LINE), "utf8");
+  const back = readFileSync(outPath, "utf8");
+  if (back !== LINE) {
+    throw new Error("output-dir round-trip is not byte-identical");
+  }
+  console.log(
+    `self-test: OK — entry is exactly ${LINE.length} characters, no trailing newline, output-dir round-trip byte-identical`,
+  );
+}
+
+if (process.argv.includes("--self-test")) {
+  selfTest();
+  process.exit(0);
+}
+
+if (LINE.endsWith("\n") || LINE !== LINE.trimEnd()) {
+  throw new Error("entry must not end with a newline or trailing whitespace");
+}
+
+const outPath = `${resolveOutputDir()}/${OUTPUT_FILE}`;
 
 mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, checkedLine(LINE), "utf8");
