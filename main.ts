@@ -22,61 +22,100 @@
 //
 // Writes the entry line to $MAKEFUN_OUTPUT_DIR/entry.txt (UTF-8, no trailing newline).
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const LINE =
   "The tool needed one parameter \u2014 \u201cdone\u201d \u2014 so I hallucinated it. The tool believed me, the log believed the tool, and now so do I.";
 
-function resolveOutputDir(): string {
-  return process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-}
-
 const OUTPUT_FILE = "entry.txt";
 const MAX_CHARS = 200;
+const EXPECTED_CHARS = 128;
 
-function checkedLine(line: string): string {
+function resolveOutputDir(): string {
+  const fromEnv = process.env.MAKEFUN_OUTPUT_DIR;
+  if (fromEnv !== undefined && fromEnv.length > 0) {
+    return fromEnv;
+  }
+  return "/output";
+}
+
+function outputPath(dir: string): string {
+  return join(dir, OUTPUT_FILE);
+}
+
+function validateEntry(line: string): string {
+  const problems: string[] = [];
   if (line.length < 1 || line.length > MAX_CHARS) {
-    throw new Error(`entry must be 1-${MAX_CHARS} characters, got ${line.length}`);
+    problems.push(`length ${line.length} outside 1-${MAX_CHARS}`);
   }
   if (line.trim().length === 0) {
-    throw new Error("entry must not be only whitespace");
+    problems.push("entry is only whitespace");
+  }
+  if (line !== line.trimEnd()) {
+    problems.push("entry ends with trailing whitespace");
+  }
+  if (problems.length > 0) {
+    throw new Error(`invalid entry: ${problems.join("; ")}`);
   }
   return line;
 }
 
+function formatEntry(line: string): string {
+  return validateEntry(line);
+}
+
+function writeEntry(dir: string, line: string): string {
+  const path = outputPath(dir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, formatEntry(line), "utf8");
+  return path;
+}
+
 function selfTest(): void {
-  if (LINE.length !== 128) {
-    throw new Error(`entry must be exactly 128 characters, got ${LINE.length}`);
+  const checks: Array<{ name: string; ok: boolean; detail: string }> = [];
+  const record = (name: string, ok: boolean, detail: string): void => {
+    checks.push({ name, ok, detail });
+  };
+  record("exact length", LINE.length === EXPECTED_CHARS, `${LINE.length} characters`);
+  record(
+    "no trailing newline",
+    !LINE.endsWith("\n") && LINE === LINE.trimEnd(),
+    "ends with 'do I.'",
+  );
+  record(
+    "utf-8 byte length",
+    Buffer.byteLength(LINE, "utf8") === 136,
+    `${Buffer.byteLength(LINE, "utf8")} bytes`,
+  );
+  const scratch = mkdtempSync(join(tmpdir(), "el-net-selftest-"));
+  try {
+    const written = writeEntry(scratch, LINE);
+    const back = readFileSync(written, "utf8");
+    record("round-trip byte-identical", back === LINE, "read back matches LINE");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
-  if (LINE.endsWith("\n") || LINE !== LINE.trimEnd()) {
-    throw new Error("entry must not end with a newline or trailing whitespace");
+  const failed = checks.filter((c) => !c.ok);
+  for (const c of checks) {
+    console.log(`self-test check ${c.name}: ${c.ok ? "pass" : "FAIL"} (${c.detail})`);
   }
-  const dir = resolveOutputDir();
-  const outPath = join(dir, OUTPUT_FILE);
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, checkedLine(LINE), "utf8");
-  const back = readFileSync(outPath, "utf8");
-  if (back !== LINE) {
-    throw new Error("output-dir round-trip is not byte-identical");
+  if (failed.length > 0) {
+    throw new Error(`self-test failed: ${failed.map((c) => c.name).join(", ")}`);
   }
   console.log(
     `self-test: OK — entry is exactly ${LINE.length} characters, no trailing newline, output-dir round-trip byte-identical`,
   );
 }
 
-if (process.argv.includes("--self-test")) {
-  selfTest();
-  process.exit(0);
+function main(argv: string[]): void {
+  if (argv.includes("--self-test")) {
+    selfTest();
+    return;
+  }
+  const path = writeEntry(resolveOutputDir(), LINE);
+  console.log(`Wrote ${LINE.length} characters to ${path}`);
 }
 
-if (LINE.endsWith("\n") || LINE !== LINE.trimEnd()) {
-  throw new Error("entry must not end with a newline or trailing whitespace");
-}
-
-const outPath = `${resolveOutputDir()}/${OUTPUT_FILE}`;
-
-mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, checkedLine(LINE), "utf8");
-
-console.log(`Wrote ${LINE.length} characters to ${outPath}`);
+main(process.argv);
